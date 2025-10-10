@@ -15,12 +15,36 @@ import yt_dlp
 ydl_opts = {}
 
 def format_selector(ctx):
-     # formats are already sorted worst to best
+    # formats are already sorted worst to best
     formats = ctx.get('formats')[::-1]
 
-    # acodec='none' means there is no audio
-    best_video = next(f for f in formats
-                      if f['vcodec'] != 'none' and f['acodec'] == 'none' and f['height'] <= 1080 and f['fps'] <= 30 )
+    # Try to find a format that matches all criteria
+    best_video = None
+    try:
+        best_video = next(f for f in formats
+                          if f['vcodec'] != 'none' and f['acodec'] == 'none' and f['height'] <= 1080 and f['fps'] <= 30)
+    except StopIteration:
+        # If no format matches all criteria, try with more flexible conditions
+        try:
+            # Try without fps restriction
+            best_video = next(f for f in formats
+                              if f['vcodec'] != 'none' and f['acodec'] == 'none' and f['height'] <= 1080)
+        except StopIteration:
+            try:
+                # Try without height restriction
+                best_video = next(f for f in formats
+                                  if f['vcodec'] != 'none' and f['acodec'] == 'none')
+            except StopIteration:
+                try:
+                    # Try with any video format (may have audio)
+                    best_video = next(f for f in formats
+                                      if f['vcodec'] != 'none')
+                except StopIteration:
+                    # If still no video format found, use the first available format
+                    best_video = formats[0] if formats else None
+
+    if best_video is None:
+        raise ValueError("No suitable video format found")
 
     # These are the minimum required fields for a merged format
     yield {
@@ -33,14 +57,27 @@ def format_selector(ctx):
 
 
 def get_yt_uri(url):
-
     ydl_opts = {
         'format': format_selector,
+        'quiet': True,  # Reduce output verbosity
+        'no_warnings': True,  # Suppress warnings
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        #info_json = json.dumps(ydl.sanitize_info(info))
-        uri  = info.get('requested_formats', [])[0].get('url')
-    return uri
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            #info_json = json.dumps(ydl.sanitize_info(info))
+            
+            requested_formats = info.get('requested_formats', [])
+            if not requested_formats:
+                raise ValueError("No requested formats found in video info")
+            
+            uri = requested_formats[0].get('url')
+            if not uri:
+                raise ValueError("No URL found in requested format")
+                
+            return uri
+    except Exception as e:
+        print(f"Error extracting YouTube URL {url}: {str(e)}")
+        raise
     
