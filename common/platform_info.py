@@ -18,18 +18,13 @@
 import sys
 import platform
 from threading import Lock
-from cuda import cudart
-from cuda import cuda
+
+# BURADAN KALDIRDIK:
+# from cuda.bindings import runtime
+# from cuda.bindings import driver
 
 guard_platform_info = Lock()
 
-import sys
-import platform
-from threading import Lock
-from cuda import cudart
-from cuda import cuda
-
-guard_platform_info = Lock()
 
 class PlatformInfo:
     def __init__(self):
@@ -39,32 +34,56 @@ class PlatformInfo:
         self.is_integrated_gpu_verified = False
         self.is_aarch64_platform = False
         self.is_aarch64_verified = False
-        self.is_jetson_nano = False
-        self.is_jetson = False
 
     def is_wsl(self):
         with guard_platform_info:
+            # Check if its already verified as WSL system or not.
             if not self.wsl_verified:
                 try:
+                    # Open /proc/version file
                     with open("/proc/version", "r") as version_file:
-                        version_info = version_file.readline().lower()
+                        # Read the content
+                        version_info = version_file.readline()
+                        version_info = version_info.lower()
                         self.wsl_verified = True
+
+                        # Check if "microsoft" is present in the version information
                         if "microsoft" in version_info:
                             self.is_wsl_system = True
                 except Exception as e:
                     print(f"ERROR: Opening /proc/version failed: {e}")
+
         return self.is_wsl_system
-    
+
     def is_integrated_gpu(self):
+        # BURAYA EKLEDIK (Lazy Import)
+        # Sadece bu fonksiyon cagrilinca cuda yuklenecek.
+        try:
+            from cuda.bindings import runtime
+            from cuda.bindings import driver
+        except ImportError:
+            print("ERROR: cuda.bindings module not found. Make sure cuda-python is installed.")
+            return False
+
+        # Using cuda apis to identify whether integrated/discreet
+        # This is required to distinguish Tegra and ARM_SBSA devices
         with guard_platform_info:
+            # Cuda initialize
             if not self.is_integrated_gpu_verified:
-                cuda_init_result, = cuda.cuInit(0)
-                if cuda_init_result == cuda.CUresult.CUDA_SUCCESS:
-                    device_count_result, num_devices = cuda.cuDeviceGetCount()
-                    if device_count_result == cuda.CUresult.CUDA_SUCCESS:
+                # Burada cuInit cagirmak risklidir ama import'u iceri aldigimiz icin
+                # main.py'de GStreamer basladiktan sonra cagirilirsa sorun cikmaz.
+                cuda_init_result, = driver.cuInit(0)
+                if cuda_init_result == driver.CUresult.CUDA_SUCCESS:
+                    # Get cuda devices count
+                    device_count_result, num_devices = driver.cuDeviceGetCount()
+                    if device_count_result == driver.CUresult.CUDA_SUCCESS:
+                        # If atleast one device is found, we can use the property from
+                        # the first device
                         if num_devices >= 1:
-                            property_result, properties = cudart.cudaGetDeviceProperties(0)
-                            if property_result == cuda.CUresult.CUDA_SUCCESS:
+                            # Get properties from first device
+                            property_result, properties = runtime.cudaGetDeviceProperties(0)
+                            if property_result == runtime.cudaError_t.cudaSuccess:
+                                print("Is it Integrated GPU? :", properties.integrated)
                                 self.is_integrated_gpu_system = properties.integrated
                                 self.is_integrated_gpu_verified = True
                             else:
@@ -75,39 +94,16 @@ class PlatformInfo:
                         print("ERROR: Getting cuda device count failed: {}".format(device_count_result))
                 else:
                     print("ERROR: Cuda init failed: {}".format(cuda_init_result))
+
         return self.is_integrated_gpu_system
 
     def is_platform_aarch64(self):
+        # Check if platform is aarch64 using uname
         if not self.is_aarch64_verified:
             if platform.uname()[4] == 'aarch64':
                 self.is_aarch64_platform = True
             self.is_aarch64_verified = True
         return self.is_aarch64_platform
 
-    def is_jetson_device(self):
-        """Checks if the device is an NVIDIA Jetson."""
-        if self.is_platform_aarch64():
-            try:
-                with open("/proc/device-tree/model", "r") as file:
-                    model_info = file.read()
-                    self.is_jetson = "NVIDIA Jetson" in model_info
-            except FileNotFoundError:
-                raise RuntimeError("ERROR: /proc/device-tree/model not found. "
-                                   "Run Docker as privileged with the --privileged flag.")
-        return self.is_jetson
-    
-    def is_jetson_nano_device(self):
-        """Checks if the device is specifically a Jetson Nano."""
-        if self.is_jetson_device():
-            try:
-                with open("/proc/device-tree/model", "r") as file:
-                    model_info = file.read()
-                    self.is_jetson_nano = "Orin Nano" in model_info
-            except FileNotFoundError:
-                raise RuntimeError("ERROR: /proc/device-tree/model not found. "
-                                   "Run Docker as privileged with the --privileged flag.")
-        return self.is_jetson_nano
-
 
 sys.path.append('/opt/nvidia/deepstream/deepstream/lib')
-
